@@ -1,0 +1,902 @@
+import React, { useState, useMemo, useCallback, useEffect } from "react";
+import Papa from "papaparse";
+
+const CSV_URL =
+  "https://raw.githubusercontent.com/rjohnson0414/olympic_visualization/refs/heads/main/olympic_medals_1896_2012.csv";
+
+const CODE_NAMES = {"AFG":"Afghanistan","AHO":"Netherlands Antilles","ALG":"Algeria","ANZ":"Australasia","ARG":"Argentina","ARM":"Armenia","AUS":"Australia","AUT":"Austria","AZE":"Azerbaijan","BAH":"Bahamas","BAR":"Barbados","BDI":"Burundi","BEL":"Belgium","BER":"Bermuda","BLR":"Belarus","BOH":"Bohemia","BOT":"Botswana","BRA":"Brazil","BRN":"Bahrain","BUL":"Bulgaria","BWI":"British West Indies","CAN":"Canada","CHI":"Chile","CHN":"China","CIV":"Côte d'Ivoire","CMR":"Cameroon","COL":"Colombia","CRC":"Costa Rica","CRO":"Croatia","CUB":"Cuba","CYP":"Cyprus","CZE":"Czech Republic","DEN":"Denmark","DJI":"Djibouti","DOM":"Dominican Republic","ECU":"Ecuador","EGY":"Egypt","ERI":"Eritrea","ESP":"Spain","EST":"Estonia","ETH":"Ethiopia","EUA":"United Team of Germany","EUN":"Unified Team","FIN":"Finland","FRA":"France","FRG":"West Germany","GAB":"Gabon","GBR":"Great Britain","GDR":"East Germany","GEO":"Georgia","GER":"Germany","GHA":"Ghana","GRE":"Greece","GRN":"Grenada","GUA":"Guatemala","GUY":"Guyana","HAI":"Haiti","HKG":"Hong Kong","HUN":"Hungary","INA":"Indonesia","IND":"India","IOP":"Independent Olympic Participants","IRI":"Iran","IRL":"Ireland","IRQ":"Iraq","ISL":"Iceland","ISR":"Israel","ISV":"Virgin Islands","ITA":"Italy","JAM":"Jamaica","JPN":"Japan","KAZ":"Kazakhstan","KEN":"Kenya","KGZ":"Kyrgyzstan","KOR":"South Korea","KSA":"Saudi Arabia","KUW":"Kuwait","LAT":"Latvia","LIB":"Lebanon","LTU":"Lithuania","LUX":"Luxembourg","MAR":"Morocco","MAS":"Malaysia","MDA":"Moldova","MEX":"Mexico","MGL":"Mongolia","MKD":"North Macedonia","MNE":"Montenegro","MOZ":"Mozambique","MRI":"Mauritius","NAM":"Namibia","NED":"Netherlands","NGR":"Nigeria","NIG":"Niger","NOR":"Norway","NZL":"New Zealand","PAK":"Pakistan","PAN":"Panama","PAR":"Paraguay","PER":"Peru","PHI":"Philippines","POL":"Poland","POR":"Portugal","PRK":"North Korea","PUR":"Puerto Rico","QAT":"Qatar","ROU":"Romania","RSA":"South Africa","RU1":"Russian Empire","RUS":"Russia","SCG":"Serbia and Montenegro","SEN":"Senegal","SGP":"Singapore","SIN":"Singapore","SLO":"Slovenia","SRB":"Serbia","SRI":"Sri Lanka","SUD":"Sudan","SUI":"Switzerland","SUR":"Suriname","SVK":"Slovakia","SWE":"Sweden","SYR":"Syria","TAN":"Tanzania","TCH":"Czechoslovakia","TGA":"Tonga","THA":"Thailand","TJK":"Tajikistan","TOG":"Togo","TPE":"Chinese Taipei","TRI":"Trinidad","TTO":"Trinidad and Tobago","TUN":"Tunisia","TUR":"Turkey","UAE":"United Arab Emirates","UGA":"Uganda","UKR":"Ukraine","URS":"Soviet Union","URU":"Uruguay","USA":"United States","UZB":"Uzbekistan","VEN":"Venezuela","VIE":"Vietnam","YUG":"Yugoslavia","ZAM":"Zambia","ZIM":"Zimbabwe","ZZX":"Mixed Team"};
+
+const MEDAL_COLOR = { g: "#D4AF37", s: "#B7BEC7", b: "#B0713A" };
+
+function fmt(n) {
+  return n.toLocaleString("en-US");
+}
+
+function buildAggregates(rows) {
+  const hostByYear = new Map();
+  const cy = new Map(); // "code|year" -> {g,s,b}
+  const cs = new Map(); // "code|sport" -> {g,s,b}
+  const yearTotals = new Map(); // year -> {g,s,b}
+  const sportsSet = new Set();
+  const countryCodes = new Set();
+
+  for (const row of rows) {
+    const year = parseInt(row.Year, 10);
+    if (!year) continue;
+    const code = (row.Country || "").trim();
+    const sport = (row.Sport || "").trim();
+    const medal = (row.Medal || "").trim().toLowerCase();
+    if (!hostByYear.has(year)) hostByYear.set(year, row.City);
+    if (sport) sportsSet.add(sport);
+    if (!code) continue;
+    countryCodes.add(code);
+
+    const cyKey = code + "|" + year;
+    if (!cy.has(cyKey)) cy.set(cyKey, { g: 0, s: 0, b: 0 });
+    const cyE = cy.get(cyKey);
+
+    const csKey = code + "|" + sport;
+    if (!cs.has(csKey)) cs.set(csKey, { g: 0, s: 0, b: 0 });
+    const csE = cs.get(csKey);
+
+    if (!yearTotals.has(year)) yearTotals.set(year, { g: 0, s: 0, b: 0 });
+    const ytE = yearTotals.get(year);
+
+    if (medal === "gold") {
+      cyE.g++; csE.g++; ytE.g++;
+    } else if (medal === "silver") {
+      cyE.s++; csE.s++; ytE.s++;
+    } else if (medal === "bronze") {
+      cyE.b++; csE.b++; ytE.b++;
+    }
+  }
+
+  const years = Array.from(hostByYear.keys()).sort((a, b) => a - b);
+
+  const countries = {};
+  for (const code of countryCodes) {
+    countries[code] = CODE_NAMES[code] || code;
+  }
+
+  const countryYear = [];
+  for (const [key, v] of cy.entries()) {
+    const [c, yStr] = key.split("|");
+    const t = v.g + v.s + v.b;
+    if (t === 0) continue;
+    countryYear.push({ c, y: parseInt(yStr, 10), g: v.g, s: v.s, b: v.b, t });
+  }
+
+  const countrySport = [];
+  for (const [key, v] of cs.entries()) {
+    const idx = key.indexOf("|");
+    const c = key.slice(0, idx);
+    const sp = key.slice(idx + 1);
+    const t = v.g + v.s + v.b;
+    if (t === 0 || !sp) continue;
+    countrySport.push({ c, sp, g: v.g, s: v.s, b: v.b, t });
+  }
+
+  const yearData = years.map((y) => {
+    const v = yearTotals.get(y) || { g: 0, s: 0, b: 0 };
+    return {
+      y,
+      city: hostByYear.get(y),
+      g: v.g,
+      s: v.s,
+      b: v.b,
+      t: v.g + v.s + v.b,
+    };
+  });
+
+  const sports = Array.from(sportsSet).sort();
+
+  return { years, countries, countryYear, countrySport, yearData, sports };
+}
+
+function useDualRange(len) {
+  const [range, setRange] = useState([0, Math.max(0, len - 1)]);
+  const setMin = useCallback((v) => {
+    setRange(([lo, hi]) => [Math.min(v, hi), hi]);
+  }, []);
+  const setMax = useCallback((v) => {
+    setRange(([lo, hi]) => [lo, Math.max(v, lo)]);
+  }, []);
+  return [range, setMin, setMax, setRange];
+}
+
+function TrackSlider({ years, yearData, range, setMin, setMax, setRange }) {
+  const n = years.length;
+  const maxTotal = Math.max(1, ...yearData.map((d) => d.t));
+  const [lo, hi] = range;
+
+  return (
+    <div className="og-track-wrap">
+      <div className="og-track-lanes" aria-hidden="true">
+        <div className="og-lane" />
+        <div className="og-lane" />
+        <div className="og-lane" />
+        <div
+          className="og-track-fill"
+          style={{
+            left: `${(lo / (n - 1)) * 100}%`,
+            right: `${100 - (hi / (n - 1)) * 100}%`,
+          }}
+        />
+      </div>
+
+      <input
+        type="range"
+        className="og-range og-range-lo"
+        min={0}
+        max={n - 1}
+        step={1}
+        value={lo}
+        onChange={(e) => setMin(Number(e.target.value))}
+        aria-label="Range start year"
+      />
+      <input
+        type="range"
+        className="og-range og-range-hi"
+        min={0}
+        max={n - 1}
+        step={1}
+        value={hi}
+        onChange={(e) => setMax(Number(e.target.value))}
+        aria-label="Range end year"
+      />
+
+      <div className="og-bubbles">
+        {yearData.map((d, i) => {
+          const inRange = i >= lo && i <= hi;
+          const r = 3 + 9 * Math.sqrt(d.t / maxTotal);
+          return (
+            <button
+              key={d.y}
+              className={`og-bubble ${inRange ? "og-bubble-on" : ""}`}
+              style={{
+                left: `${(i / (n - 1)) * 100}%`,
+                width: r * 2,
+                height: r * 2,
+                marginLeft: -r,
+              }}
+              title={`${d.y} · ${d.city} · ${fmt(d.t)} medals`}
+              onClick={() => setRange([i, i])}
+            >
+              <span className="og-bubble-dot" />
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="og-ticks">
+        {years.map((y, i) => {
+          const show = i === 0 || i === n - 1 || i % 4 === 0;
+          if (!show) return null;
+          return (
+            <span
+              key={y}
+              className="og-tick"
+              style={{ left: `${(i / (n - 1)) * 100}%` }}
+            >
+              {y}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TrendChart({ trend, lo, hi, metric }) {
+  const W = 720,
+    H = 220,
+    PAD = 28;
+  const n = trend.length;
+  const maxVal =
+    Math.max(1, ...trend.map((d) => Math.max(d.t, d.g, d.s, d.b))) * 1.15;
+
+  const xAt = (i) => PAD + (i / (n - 1)) * (W - PAD * 2);
+  const yAt = (v) => H - PAD - (v / maxVal) * (H - PAD * 1.6);
+
+  const line = (key) =>
+    trend.map((d, i) => `${i === 0 ? "M" : "L"} ${xAt(i)} ${yAt(d[key])}`).join(" ");
+
+  const area =
+    `M ${xAt(0)} ${H - PAD} ` +
+    trend.map((d, i) => `L ${xAt(i)} ${yAt(d.t)}`).join(" ") +
+    ` L ${xAt(n - 1)} ${H - PAD} Z`;
+
+  const bandX1 = xAt(lo);
+  const bandX2 = xAt(hi);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="og-trend-svg" role="img">
+      <rect
+        x={bandX1}
+        y={4}
+        width={Math.max(2, bandX2 - bandX1)}
+        height={H - 8}
+        fill="rgba(212,175,55,0.10)"
+        stroke="rgba(212,175,55,0.35)"
+        strokeDasharray="3 3"
+      />
+      <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke="rgba(241,238,228,0.18)" />
+      <path d={area} fill="rgba(241,238,228,0.08)" />
+      <path d={line("t")} fill="none" stroke="#EDE9DD" strokeWidth="2" opacity="0.55" />
+      <path d={line("g")} fill="none" stroke={MEDAL_COLOR.g} strokeWidth="2.5" />
+      <path d={line("s")} fill="none" stroke={MEDAL_COLOR.s} strokeWidth="1.5" opacity="0.85" />
+      <path d={line("b")} fill="none" stroke={MEDAL_COLOR.b} strokeWidth="1.5" opacity="0.85" />
+      {trend.map((d, i) =>
+        d.t > 0 ? (
+          <circle key={d.y} cx={xAt(i)} cy={yAt(metric === "gold" ? d.g : d.t)} r="2.6" fill={metric === "gold" ? MEDAL_COLOR.g : "#EDE9DD"}>
+            <title>{`${d.y}: ${d.g}G ${d.s}S ${d.b}B`}</title>
+          </circle>
+        ) : null
+      )}
+    </svg>
+  );
+}
+
+function SportBars({ rows }) {
+  const max = Math.max(1, ...rows.map((r) => r.t));
+  return (
+    <div className="og-sportbars">
+      {rows.map((r) => (
+        <div className="og-sportbar-row" key={r.sp}>
+          <span className="og-sportbar-label">{r.sp}</span>
+          <div className="og-sportbar-track">
+            <div
+              className="og-sportbar-fill"
+              style={{ width: `${(r.t / max) * 100}%` }}
+            />
+          </div>
+          <span className="og-sportbar-count">{r.t}</span>
+        </div>
+      ))}
+      {rows.length === 0 && (
+        <p className="og-empty">No medals recorded for this sport view.</p>
+      )}
+    </div>
+  );
+}
+
+const DASHBOARD_STYLES = `
+  @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  .og-root {
+    --ink: #0B1526;
+    --ink-2: #101F38;
+    --ink-3: #1A2C4C;
+    --line: rgba(241,238,228,0.12);
+    --chalk: #F1EEE4;
+    --slate: #8FA0BF;
+    --gold: #D4AF37;
+    --silver: #B7BEC7;
+    --bronze: #B0713A;
+    --clay: #B23B22;
+    background: radial-gradient(1200px 600px at 15% -10%, #16294A 0%, var(--ink) 55%), var(--ink);
+    color: var(--chalk);
+    font-family: 'Inter', sans-serif;
+    border-radius: 18px;
+    padding: 32px;
+    max-width: 1180px;
+    margin: 0 auto;
+    box-sizing: border-box;
+    min-height: 200px;
+  }
+  .og-root * { box-sizing: border-box; }
+
+  .og-status {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 40px 4px;
+  }
+  .og-status-title { font-family: 'Oswald', sans-serif; font-size: 20px; }
+  .og-status-body { color: var(--slate); font-size: 13.5px; line-height: 1.6; max-width: 560px; }
+  .og-status-code {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    background: var(--ink-2);
+    border: 1px solid var(--line);
+    padding: 8px 10px;
+    border-radius: 6px;
+    word-break: break-all;
+    color: var(--gold);
+  }
+  .og-spinner {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    border: 3px solid var(--ink-3);
+    border-top-color: var(--gold);
+    animation: og-spin 0.8s linear infinite;
+  }
+  @keyframes og-spin { to { transform: rotate(360deg); } }
+
+  .og-eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-size: 12px;
+    color: var(--gold);
+    margin: 0 0 10px;
+  }
+  .og-h1 {
+    font-family: 'Oswald', sans-serif;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.01em;
+    font-size: clamp(28px, 4.2vw, 46px);
+    line-height: 1.02;
+    margin: 0 0 12px;
+  }
+  .og-h1 span { color: var(--gold); }
+  .og-sub {
+    color: var(--slate);
+    font-size: 15px;
+    max-width: 620px;
+    line-height: 1.55;
+    margin: 0 0 22px;
+  }
+
+  .og-stats {
+    display: flex;
+    gap: 28px;
+    flex-wrap: wrap;
+    margin-bottom: 30px;
+    padding-bottom: 26px;
+    border-bottom: 1px solid var(--line);
+  }
+  .og-stat-num {
+    font-family: 'Oswald', sans-serif;
+    font-size: 26px;
+    font-weight: 600;
+    color: var(--chalk);
+  }
+  .og-stat-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--slate);
+    margin-top: 2px;
+  }
+
+  .og-track-section { margin-bottom: 34px; }
+  .og-track-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--slate);
+    margin: 0 0 14px;
+  }
+  .og-track-wrap {
+    position: relative;
+    height: 108px;
+    padding: 0 6px;
+  }
+  .og-track-lanes {
+    position: absolute;
+    top: 44px;
+    left: 6px;
+    right: 6px;
+    height: 22px;
+  }
+  .og-lane {
+    position: absolute;
+    left: 0; right: 0;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(241,238,228,0.06);
+  }
+  .og-lane:nth-child(1) { top: 0; }
+  .og-lane:nth-child(2) { top: 8px; }
+  .og-lane:nth-child(3) { top: 16px; }
+  .og-track-fill {
+    position: absolute;
+    top: 6px;
+    height: 10px;
+    border-radius: 5px;
+    background: linear-gradient(90deg, rgba(212,175,55,0.55), rgba(212,175,55,0.85));
+  }
+  .og-range {
+    position: absolute;
+    top: 44px;
+    left: 0; right: 0;
+    width: 100%;
+    height: 22px;
+    margin: 0;
+    background: transparent;
+    appearance: none;
+    -webkit-appearance: none;
+    pointer-events: none;
+  }
+  .og-range::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    pointer-events: all;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--gold);
+    border: 3px solid var(--ink);
+    box-shadow: 0 0 0 1px var(--gold);
+    cursor: grab;
+    margin-top: 1px;
+  }
+  .og-range::-moz-range-thumb {
+    pointer-events: all;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--gold);
+    border: 3px solid var(--ink);
+    cursor: grab;
+  }
+  .og-range::-webkit-slider-runnable-track { background: transparent; }
+  .og-range::-moz-range-track { background: transparent; }
+
+  .og-bubbles {
+    position: absolute;
+    top: 4px;
+    left: 6px;
+    right: 6px;
+    height: 34px;
+  }
+  .og-bubble {
+    position: absolute;
+    bottom: 0;
+    border-radius: 50%;
+    background: rgba(143,160,191,0.35);
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.15s ease, transform 0.15s ease;
+  }
+  .og-bubble:hover { transform: scale(1.15); }
+  .og-bubble-on { background: var(--gold); }
+  .og-bubble-dot { display: block; width: 100%; height: 100%; }
+
+  .og-ticks {
+    position: absolute;
+    top: 76px;
+    left: 6px;
+    right: 6px;
+    height: 20px;
+  }
+  .og-tick {
+    position: absolute;
+    transform: translateX(-50%);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--slate);
+    white-space: nowrap;
+  }
+
+  .og-range-label {
+    font-family: 'Oswald', sans-serif;
+    font-size: 15px;
+    color: var(--chalk);
+    margin-top: 4px;
+  }
+  .og-range-label b { color: var(--gold); font-weight: 600; }
+
+  .og-grid {
+    display: grid;
+    grid-template-columns: 1.05fr 1.35fr;
+    gap: 22px;
+  }
+  @media (max-width: 860px) {
+    .og-grid { grid-template-columns: 1fr; }
+  }
+
+  .og-panel {
+    background: var(--ink-2);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px;
+  }
+  .og-panel-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--slate);
+    margin: 0 0 4px;
+  }
+  .og-panel-sub {
+    font-family: 'Oswald', sans-serif;
+    font-size: 20px;
+    margin: 0 0 16px;
+  }
+
+  .og-controls-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .og-search {
+    background: var(--ink-3);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 7px 10px;
+    color: var(--chalk);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    width: 150px;
+  }
+  .og-search::placeholder { color: var(--slate); }
+  .og-search:focus, .og-range:focus-visible, .og-bubble:focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: 2px;
+  }
+
+  .og-segmented {
+    display: inline-flex;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .og-seg-btn {
+    background: transparent;
+    border: none;
+    color: var(--slate);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 7px 11px;
+    cursor: pointer;
+  }
+  .og-seg-btn.on { background: var(--ink-3); color: var(--gold); }
+
+  .og-table { display: flex; flex-direction: column; gap: 7px; max-height: 430px; overflow-y: auto; padding-right: 4px; }
+  .og-row {
+    display: grid;
+    grid-template-columns: 24px 1fr 96px 40px;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px;
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    cursor: pointer;
+    text-align: left;
+    color: var(--chalk);
+    font-family: 'Inter', sans-serif;
+  }
+  .og-row:hover { background: var(--ink-3); }
+  .og-row.on { background: var(--ink-3); border-color: rgba(212,175,55,0.5); }
+  .og-rank { font-family: 'IBM Plex Mono', monospace; color: var(--slate); font-size: 12px; }
+  .og-cname { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .og-mini-bar { height: 8px; border-radius: 4px; background: var(--ink-3); overflow: hidden; display: flex; }
+  .og-mini-seg-g { background: var(--gold); height: 100%; }
+  .og-mini-seg-s { background: var(--silver); height: 100%; }
+  .og-mini-seg-b { background: var(--bronze); height: 100%; }
+  .og-total { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; text-align: right; color: var(--chalk); }
+
+  .og-legend { display: flex; gap: 14px; margin-top: 12px; }
+  .og-legend-item { display: flex; align-items: center; gap: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--slate); }
+  .og-legend-dot { width: 9px; height: 9px; border-radius: 50%; }
+
+  .og-trend-svg { width: 100%; height: auto; }
+
+  .og-country-totals { display: flex; gap: 22px; margin: 14px 0 18px; }
+  .og-ct-num { font-family: 'Oswald', sans-serif; font-size: 22px; }
+  .og-ct-label { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--slate); }
+
+  .og-sportbars { display: flex; flex-direction: column; gap: 9px; margin-top: 6px; }
+  .og-sportbar-row { display: grid; grid-template-columns: 118px 1fr 30px; align-items: center; gap: 8px; }
+  .og-sportbar-label { font-size: 12px; color: var(--chalk); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .og-sportbar-track { background: var(--ink-3); border-radius: 4px; height: 8px; overflow: hidden; }
+  .og-sportbar-fill { height: 100%; background: linear-gradient(90deg, var(--clay), var(--gold)); border-radius: 4px; }
+  .og-sportbar-count { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--slate); text-align: right; }
+
+  .og-empty { color: var(--slate); font-size: 13px; }
+
+  .og-table::-webkit-scrollbar { width: 6px; }
+  .og-table::-webkit-scrollbar-thumb { background: var(--ink-3); border-radius: 3px; }
+`;
+
+export default function OlympicMedalDashboard() {
+  const [status, setStatus] = useState("loading"); // loading | error | ready
+  const [errorMsg, setErrorMsg] = useState("");
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(CSV_URL)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.text();
+      })
+      .then((text) => {
+        const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+        if (cancelled) return;
+        const agg = buildAggregates(parsed.data);
+        setData(agg);
+        setStatus("ready");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setErrorMsg(err.message || String(err));
+        setStatus("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const [range, setMin, setMax, setRange] = useDualRange(data ? data.years.length : 1);
+  const [selectedCountry, setSelectedCountry] = useState("USA");
+  const [search, setSearch] = useState("");
+  const [metric, setMetric] = useState("total");
+
+  const years = data ? data.years : [];
+  const minYear = years.length ? years[Math.min(range[0], years.length - 1)] : null;
+  const maxYear = years.length ? years[Math.min(range[1], years.length - 1)] : null;
+
+  const countryTotalsInRange = useMemo(() => {
+    if (!data) return [];
+    const map = new Map();
+    for (const row of data.countryYear) {
+      if (row.y < minYear || row.y > maxYear) continue;
+      if (!map.has(row.c)) map.set(row.c, { c: row.c, g: 0, s: 0, b: 0, t: 0 });
+      const e = map.get(row.c);
+      e.g += row.g;
+      e.s += row.s;
+      e.b += row.b;
+      e.t += row.t;
+    }
+    let arr = Array.from(map.values());
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      arr = arr.filter(
+        (e) =>
+          (data.countries[e.c] || e.c).toLowerCase().includes(q) ||
+          e.c.toLowerCase().includes(q)
+      );
+    }
+    arr.sort((a, b) =>
+      metric === "gold" ? b.g - a.g || b.t - a.t : b.t - a.t || b.g - a.g
+    );
+    return arr;
+  }, [data, minYear, maxYear, search, metric]);
+
+  const topList = countryTotalsInRange.slice(0, 15);
+
+  const countryTrend = useMemo(() => {
+    if (!data) return [];
+    const rows = data.countryYear.filter((r) => r.c === selectedCountry);
+    const byYear = new Map(rows.map((r) => [r.y, r]));
+    return years.map(
+      (y) => byYear.get(y) || { c: selectedCountry, y, g: 0, s: 0, b: 0, t: 0 }
+    );
+  }, [data, selectedCountry, years]);
+
+  const countrySportTop = useMemo(() => {
+    if (!data) return [];
+    const rows = data.countrySport.filter((r) => r.c === selectedCountry);
+    return [...rows].sort((a, b) => b.t - a.t).slice(0, 8);
+  }, [data, selectedCountry]);
+
+  const selectedTotals = useMemo(() => {
+    let g = 0,
+      s = 0,
+      b = 0;
+    for (const r of countryTrend) {
+      if (r.y >= minYear && r.y <= maxYear) {
+        g += r.g;
+        s += r.s;
+        b += r.b;
+      }
+    }
+    return { g, s, b, t: g + s + b };
+  }, [countryTrend, minYear, maxYear]);
+
+  const heroStats = useMemo(() => {
+    if (!data) return { totalMedals: 0, nations: 0, games: 0 };
+    const totalMedals = data.yearData.reduce((a, y) => a + y.t, 0);
+    const nations = Object.keys(data.countries).length;
+    return { totalMedals, nations, games: years.length };
+  }, [data, years]);
+
+  if (status === "loading") {
+    return (
+      <div className="og-root">
+        <style>{DASHBOARD_STYLES}</style>
+        <div className="og-status">
+          <div className="og-spinner" />
+          <p className="og-status-title">Loading medal data…</p>
+          <p className="og-status-body">Fetching and parsing the CSV from the configured source.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "error") {
+    return (
+      <div className="og-root">
+        <style>{DASHBOARD_STYLES}</style>
+        <div className="og-status">
+          <p className="og-status-title">Couldn't load the medal data</p>
+          <p className="og-status-body">
+            The fetch to the CSV source failed ({errorMsg}). Make sure{" "}
+            <code>CSV_URL</code> at the top of this file points to a
+            reachable, CORS-enabled URL — a raw GitHub URL works well:
+          </p>
+          <p className="og-status-code">{CSV_URL}</p>
+          <p className="og-status-body">
+            After pushing <code>olympic_medals_1896_2012.csv</code> to your
+            repo, replace the placeholder with the "Raw" URL GitHub gives
+            you for that file.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const selectedName = data.countries[selectedCountry] || selectedCountry;
+
+  return (
+    <div className="og-root">
+      <style>{DASHBOARD_STYLES}</style>
+
+      <p className="og-eyebrow">
+        {years[0]} – {years[years.length - 1]} · {heroStats.games} Editions
+      </p>
+      <h1 className="og-h1">
+        Summer Games <span>Medal Archive</span>
+      </h1>
+      <p className="og-sub">
+        Every medal awarded across {heroStats.games} editions of the Summer
+        Olympics, from Athens {years[0]} to London {years[years.length - 1]}.
+        Drag the track below to set a time window, then pick a nation to see
+        its trajectory.
+      </p>
+
+      <div className="og-stats">
+        <div>
+          <div className="og-stat-num">{fmt(heroStats.totalMedals)}</div>
+          <div className="og-stat-label">Medals awarded</div>
+        </div>
+        <div>
+          <div className="og-stat-num">{heroStats.nations}</div>
+          <div className="og-stat-label">Nations &amp; teams</div>
+        </div>
+        <div>
+          <div className="og-stat-num">{data.sports.length}</div>
+          <div className="og-stat-label">Sports contested</div>
+        </div>
+        <div>
+          <div className="og-stat-num">{heroStats.games}</div>
+          <div className="og-stat-label">Games held</div>
+        </div>
+      </div>
+
+      <div className="og-track-section">
+        <p className="og-track-title">Time window</p>
+        <TrackSlider
+          years={years}
+          yearData={data.yearData}
+          range={range}
+          setMin={setMin}
+          setMax={setMax}
+          setRange={setRange}
+        />
+        <p className="og-range-label">
+          Showing <b>{minYear}</b> – <b>{maxYear}</b> · click a lap marker to
+          jump to a single Games
+        </p>
+      </div>
+
+      <div className="og-grid">
+        <div className="og-panel">
+          <p className="og-panel-title">Medal table</p>
+          <p className="og-panel-sub">
+            Ranked {minYear}–{maxYear}
+          </p>
+
+          <div className="og-controls-row">
+            <input
+              className="og-search"
+              placeholder="Search nation…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <div className="og-segmented">
+              <button
+                className={`og-seg-btn ${metric === "total" ? "on" : ""}`}
+                onClick={() => setMetric("total")}
+              >
+                Total
+              </button>
+              <button
+                className={`og-seg-btn ${metric === "gold" ? "on" : ""}`}
+                onClick={() => setMetric("gold")}
+              >
+                Gold
+              </button>
+            </div>
+          </div>
+
+          <div className="og-table">
+            {topList.map((e, i) => {
+              const val = metric === "gold" ? e.g : e.t;
+              const gW = e.t ? (e.g / e.t) * 100 : 0;
+              const sW = e.t ? (e.s / e.t) * 100 : 0;
+              const bW = e.t ? (e.b / e.t) * 100 : 0;
+              return (
+                <button
+                  key={e.c}
+                  className={`og-row ${e.c === selectedCountry ? "on" : ""}`}
+                  onClick={() => setSelectedCountry(e.c)}
+                >
+                  <span className="og-rank">{i + 1}</span>
+                  <span className="og-cname">{data.countries[e.c] || e.c}</span>
+                  <span className="og-mini-bar">
+                    <span className="og-mini-seg-g" style={{ width: `${gW}%` }} />
+                    <span className="og-mini-seg-s" style={{ width: `${sW}%` }} />
+                    <span className="og-mini-seg-b" style={{ width: `${bW}%` }} />
+                  </span>
+                  <span className="og-total">{fmt(val)}</span>
+                </button>
+              );
+            })}
+            {topList.length === 0 && (
+              <p className="og-empty">No nations match "{search}" in this window.</p>
+            )}
+          </div>
+
+          <div className="og-legend">
+            <span className="og-legend-item">
+              <span className="og-legend-dot" style={{ background: MEDAL_COLOR.g }} /> Gold
+            </span>
+            <span className="og-legend-item">
+              <span className="og-legend-dot" style={{ background: MEDAL_COLOR.s }} /> Silver
+            </span>
+            <span className="og-legend-item">
+              <span className="og-legend-dot" style={{ background: MEDAL_COLOR.b }} /> Bronze
+            </span>
+          </div>
+        </div>
+
+        <div className="og-panel">
+          <p className="og-panel-title">Nation focus</p>
+          <p className="og-panel-sub">{selectedName}</p>
+
+          <div className="og-country-totals">
+            <div>
+              <div className="og-ct-num" style={{ color: MEDAL_COLOR.g }}>{selectedTotals.g}</div>
+              <div className="og-ct-label">Gold</div>
+            </div>
+            <div>
+              <div className="og-ct-num" style={{ color: MEDAL_COLOR.s }}>{selectedTotals.s}</div>
+              <div className="og-ct-label">Silver</div>
+            </div>
+            <div>
+              <div className="og-ct-num" style={{ color: MEDAL_COLOR.b }}>{selectedTotals.b}</div>
+              <div className="og-ct-label">Bronze</div>
+            </div>
+            <div>
+              <div className="og-ct-num">{selectedTotals.t}</div>
+              <div className="og-ct-label">In window</div>
+            </div>
+          </div>
+
+          <TrendChart trend={countryTrend} lo={range[0]} hi={range[1]} metric={metric} />
+
+          <p className="og-panel-title" style={{ marginTop: 20 }}>
+            Strongest sports · all-time
+          </p>
+          <SportBars rows={countrySportTop} />
+        </div>
+      </div>
+    </div>
+  );
+}
